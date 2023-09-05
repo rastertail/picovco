@@ -1,0 +1,22 @@
+{
+    "name": "picovco",
+    "image": "docker.io/library/ubuntu:kinetic",
+    "initializeCommand": "nix run .#gen-dev-env -- .#picovco > nix.env",
+    "runArgs": [
+        "--env-file",
+        "nix.env"
+    ],
+    "mounts": [
+        "type=bind,source=/etc/ssl,target=/etc/ssl,readonly",
+        "type=bind,source=/nix/store,target=/nix/store,readonly"
+    ],
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-vscode.cpptools",
+                "twxs.cmake",
+                "ms-vscode.cmake-tools"
+            ]
+        }
+    }
+}

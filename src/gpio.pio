@@ -1,0 +1,5 @@
+.program pio_gpio
+
+loop:
+    out pins,1
+    jmp loop
