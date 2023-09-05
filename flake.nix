@@ -9,7 +9,7 @@
       pkgs = import nixpkgs { inherit system; };
     in {
       devShells.picovco = pkgs.mkShell {
-        packages = with pkgs; [ git bashInteractive gcc-arm-embedded cmake ninja python3 ];
+        packages = with pkgs; [ git openssh bashInteractive gcc-arm-embedded cmake ninja python3 ];
       };
 
       apps.gen-dev-env = {
