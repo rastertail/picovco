@@ -1,4 +1,3 @@
-#include <hardware/interp.h>
 #include <pico/multicore.h>
 #include <pico/stdlib.h>
 
@@ -52,26 +51,13 @@ int main() {
   // Start USB stack
   multicore_launch_core1(core1_entry);
 
-  // Configure interpolator lanes
-  interp_config ic = interp_default_config();
-
-  interp_config_set_cross_result(&ic, true);
-  interp_config_set_add_raw(&ic, true);
-  interp_set_config(interp0, 0, &ic);
-
-  interp_config_set_mask(&ic, 0, 30);
-  interp_config_set_add_raw(&ic, false);
-  interp_set_config(interp0, 1, &ic);
-
-  interp_set_base_both(interp0, 0);
-
   // Initialize PIO
   uint pio_ofs = pio_add_program(pio0, &pio_gpio_program);
   uint sm = pio_claim_unused_sm(pio0, true);
 
   pio_sm_config pc = pio_gpio_program_get_default_config(pio_ofs);
   sm_config_set_out_pins(&pc, OSC_GPIO, 1);
-  sm_config_set_out_shift(&pc, false, true, 1);
+  sm_config_set_out_shift(&pc, true, true, 1);
   sm_config_set_clkdiv_int_frac(&pc, 1, 0);
 
   pio_gpio_init(pio0, OSC_GPIO);
@@ -82,10 +68,17 @@ int main() {
 
   // Main loop
   uint32_t w = 0;
+  uint32_t a = 0;
   while (true) {
-    w += pitch;
-    interp0->base[0] = w;
-    pio0->txf[sm] = interp0->pop[0];
+    uint32_t v = 0;
+    __asm(".syntax unified\n\t"
+          "add %[w], %[pitch]\n\t"
+          "adds %[a], %[w]\n\t"
+          "adcs %[v], %[v]"
+          : [w] "+r"(w), [a] "+r"(a), [v] "+r"(v)
+          : [pitch] "r"(pitch)
+          : "cc");
+    pio0->txf[sm] = v;
   }
 
   return 0;
