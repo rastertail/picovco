@@ -6,10 +6,9 @@
 
 #include "gpio.pio.h"
 
-#define OSC_GPIO 15
+#define OSC_BASE 14
 
 static volatile uint32_t pitch = 0;
-static volatile uint32_t pitch2 = 0;
 const uint32_t pitch_table[128] = {
     256,    271,    287,    304,    323,    342,    362,    384,    406,
     431,    456,    483,    512,    542,    575,    609,    645,    683,
@@ -39,15 +38,11 @@ void core1_entry() {
       uint8_t packet[4];
       tud_midi_packet_read(packet);
 
-      if (packet[1] == 0xB0 && packet[2] == 0x01) {
-        mw = packet[3];
-      }
       if (packet[1] == 0x90) {
         note = packet[2];
       }
     }
-    pitch = (pitch_table[note] * (2000 + (mw << 8))) >> 8;
-    pitch2 = (pitch_table[note] * 2000) >> 8;
+    pitch = (pitch_table[note] * 2000) >> 8;
   }
 }
 
@@ -63,34 +58,84 @@ int main() {
   uint sm = pio_claim_unused_sm(pio0, true);
 
   pio_sm_config pc = pio_gpio_program_get_default_config(pio_ofs);
-  sm_config_set_out_pins(&pc, OSC_GPIO, 1);
-  sm_config_set_out_shift(&pc, true, true, 1);
+  sm_config_set_out_pins(&pc, OSC_BASE, 4);
+  sm_config_set_out_shift(&pc, true, true, 4);
   sm_config_set_clkdiv_int_frac(&pc, 1, 0);
 
-  pio_gpio_init(pio0, OSC_GPIO);
-  pio_sm_set_consecutive_pindirs(pio0, sm, OSC_GPIO, 1, true);
+  pio_gpio_init(pio0, OSC_BASE);
+  pio_gpio_init(pio0, OSC_BASE + 1);
+  pio_gpio_init(pio0, OSC_BASE + 2);
+  pio_gpio_init(pio0, OSC_BASE + 3);
+  pio_sm_set_consecutive_pindirs(pio0, sm, OSC_BASE, 4, true);
 
   pio_sm_init(pio0, sm, pio_ofs, &pc);
   pio_sm_set_enabled(pio0, sm, true);
 
   // Main loop
   uint32_t w = 0;
-  uint32_t w2 = 0;
-  uint32_t a = 0;
+  uint32_t mash[7] = {0, 0, 0, 0, 0, 0, 0};
+  uint32_t b = 0;
+  uint32_t z = 0;
+  volatile uint32_t *o = &pio0->txf[sm];
   while (true) {
-    uint32_t v = 0;
-    __asm(".syntax unified\n\t"
-          "adds %[w2], %[pitch2]\n\t"
-          "bcc .nosync\n\t"
-          "movs %[w], #0\n"
-          ".nosync:\n\t"
-          "add %[w], %[pitch]\n\t"
-          "adds %[a], %[w]\n\t"
-          "adcs %[v], %[v]"
-          : [w] "+r"(w), [w2] "+r"(w2), [a] "+r"(a), [v] "+r"(v)
-          : [pitch] "r"(pitch), [pitch2] "r"(pitch2)
-          : "cc");
-    pio0->txf[sm] = v;
+    __asm volatile(
+        ".syntax unified\n\t"
+        "ldr r0,[%[pitch]]\n\t" // calc wave
+        "add %[w],r0\n\t"
+
+        "ldr r0,[%[mash],#0]\n\t" // mash integrate (stage 1)
+        "adds r0,%[w]\n\t"
+        "adcs %[b],%[z]\n\t"
+        "str r0,[%[mash],#0]\n\t"
+        "lsls %[b],%[b],#1\n\t"
+
+        "ldr r1,[%[mash],#4]\n\t" // mash integrate (stage 2)
+        "adds r0,r1\n\t"
+        "adcs %[b],%[z]\n\t"
+        "str r0,[%[mash],#4]\n\t"
+        "lsls %[b],%[b],#1\n\t"
+
+        "ldr r1,[%[mash],#8]\n\t" // mash integrate (stage 3)
+        "adds r0,r1\n\t"
+        "adcs %[b],%[z]\n\t"
+        "str r0,[%[mash],#8]\n\t"
+        "lsls %[b],%[b],#1\n\t"
+
+        "ldr r1,[%[mash],#12]\n\t" // mash integrate (stage 4)
+        "adds r0,r1\n\t"
+        "adcs %[b],%[z]\n\t"
+        "str r0,[%[mash],#12]\n\t"
+
+        "movs r0,#0\n\t" // init output
+
+        "lsrs %[b],%[b],#1\n\t" // mash differentiate (stage 4)
+        "adcs r0,%[z]\n\t"
+        "ldr r1,[%[mash],#16]\n\t"
+        "str r0,[%[mash],#16]\n\t"
+        "subs r0,r1\n\t"
+
+        "lsrs %[b],%[b],#1\n\t" // mash differentiate (stage 3)
+        "adcs r0,%[z]\n\t"
+        "ldr r1,[%[mash],#20]\n\t"
+        "str r0,[%[mash],#20]\n\t"
+        "subs r0,r1\n\t"
+
+        "lsrs %[b],%[b],#1\n\t" // mash differentiate (stage 2)
+        "adcs r0,%[z]\n\t"
+        "ldr r1,[%[mash],#24]\n\t"
+        "str r0,[%[mash],#24]\n\t"
+        "subs r0,r1\n\t"
+
+        "lsrs %[b],%[b],#1\n\t" // mash sum (stage 1)
+        "adcs r0,%[z]\n\t"
+
+        "adds r0,#7\n\t" // correct range
+
+        "str r0,[%[o]]\n\t" // write to pio
+
+        : [w] "+r"(w), [b] "+r"(b)
+        : [pitch] "r"(&pitch), [mash] "r"(mash), [z] "r"(z), [o] "r"(o)
+        : "r0", "r1", "cc", "memory");
   }
 
   return 0;
